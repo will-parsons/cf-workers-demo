@@ -1,69 +1,73 @@
-import { DurableObject } from "cloudflare:workers";
+//const jwt = require('jsonwebtoken');
 
 /**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
-
-/**
- * Env provides a mechanism to reference bindings declared in wrangler.toml within JavaScript
- *
- * @typedef {Object} Env
- * @property {DurableObjectNamespace} MY_DURABLE_OBJECT - The Durable Object namespace binding
- */
-
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param {DurableObjectState} ctx - The interface for interacting with Durable Object state
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.toml
-	 */
-	constructor(ctx, env) {
-		super(ctx, env);
-	}
-
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param {string} name - The name provided to a Durable Object instance from a Worker
-	 * @returns {Promise<string>} The greeting to be sent back to the Worker
-	 */
-	async sayHello(name) {
-		return `Hello, ${name}!`;
-	}
+ * Parse and decode a JWT.
+ * A JWT is three, base64 encoded, strings concatenated with ‘.’:
+ *   a header, a payload, and the signature.
+ * The signature is “URL safe”, in that ‘/+’ characters have been replaced by ‘_-’
+ * 
+ * Steps:
+ * 1. Split the token at the ‘.’ character
+ * 2. Base64 decode the individual parts
+ * 3. Retain the raw Bas64 encoded strings to verify the signature
+ *  Borrowed from https://gist.github.com/bcnzer/e6a7265fd368fa22ef960b17b9a76488 
+*/
+function decodeJwt(token) {
+  const parts = token.split('.');
+  const header = JSON.parse(atob(parts[0]));
+  const payload = JSON.parse(atob(parts[1]));
+  const signature = atob(parts[2].replace(/_/g, '/').replace(/-/g, '+'));
+  console.log(header)
+  return {
+    header: header,
+    payload: payload,
+    signature: signature,
+    raw: { header: parts[0], payload: parts[1], signature: parts[2] }
+  }
 }
 
+
 export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param {Request} request - The request submitted to the Worker from the client
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.toml
-	 * @param {ExecutionContext} ctx - The execution context of the Worker
-	 * @returns {Promise<Response>} The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx) {
-		// We will create a `DurableObjectId` using the pathname from the Worker request
-		// This id refers to a unique instance of our 'MyDurableObject' class above
-		let id = env.MY_DURABLE_OBJECT.idFromName(new URL(request.url).pathname);
+  async fetch(request, env, ctx) {
 
-		// This stub creates a communication channel with the Durable Object instance
-		// The Durable Object constructor will be invoked upon the first call for a given id
-		let stub = env.MY_DURABLE_OBJECT.get(id);
+    // if the request is "/secure/XX" (two letter country code) then handle the response differently. 
+    const urlPath = new URL(request.url).pathname;
+    const countryRegExp = new RegExp(/(secure\/)[a-zA-Z]{2}$/);
+    if (countryRegExp.test(urlPath)) {
+      // take the last two characters, and make them lowercase because my flag files are named "ab.png"
+      let country = urlPath.slice(-2).toLowerCase();
+      // get the flag from the bucket
+      const object = await env.FLAGS_BUCKET.get(`${country}.png`);
+      // to handle anything missing or not a real country code
+      if (object === null) {
+          return new Response('Object Not Found', { status: 404 });
+      }
+      //return the file's contents with the appropriate content-type
+      return new Response(object.body, {
+	      headers: { "content-type": "image/png" },
+      });
+    }
 
-		// We call the `sayHello()` RPC method on the stub to invoke the method on the remote
-		// Durable Object instance
-		let greeting = await stub.sayHello("world");
 
-		return new Response(greeting);
-	},
+    //get the JWT header, parse it, and assign variables	  
+    const jwtHeader = request.headers.get("Cf-Access-Jwt-Assertion"); 
+    const jwtDecoded = decodeJwt(jwtHeader);
+    const jwtEmail = jwtDecoded.payload.email;
+    const jwtIssuedAtTime = jwtDecoded.payload.iat;
+    const jwtCountry = jwtDecoded.payload.country;
+    const localTimestamp = new Date(jwtIssuedAtTime * 1000)
+
+    let responseBody = "";
+    responseBody = responseBody.concat("<html><title>Worker demo</title><body><h1>Worker Demo</h1>");
+    responseBody = responseBody.concat(`${jwtEmail} authenticated at ${localTimestamp} from <a href=/secure/${jwtCountry}>${jwtCountry}</a>`);
+    responseBody = responseBody.concat(`<br />URL path was: ${urlPath} `);
+    responseBody = responseBody.concat("</body></html>");
+
+
+    return new Response(responseBody, {
+      	headers: {
+        "content-type": "text/html",
+      },
+    });
+  },
 };
