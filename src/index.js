@@ -1,5 +1,3 @@
-//const jwt = require('jsonwebtoken');
-
 /**
  * Parse and decode a JWT.
  * A JWT is three, base64 encoded, strings concatenated with ‘.’:
@@ -10,6 +8,7 @@
  * 1. Split the token at the ‘.’ character
  * 2. Base64 decode the individual parts
  * 3. Retain the raw Bas64 encoded strings to verify the signature
+ *
  *  Borrowed from https://gist.github.com/bcnzer/e6a7265fd368fa22ef960b17b9a76488 
 */
 function decodeJwt(token) {
